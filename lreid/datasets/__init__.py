@@ -13,3 +13,4 @@ from .market1501 import IncrementalSamples4market
 from .dukemtmcreid import IncrementalSamples4duke
 from .cuhksysu import IncrementalSamples4subcuhksysu
 from .mix import IncrementalSamples4mix
+from .ip102 import IncrementalSamples4ip102

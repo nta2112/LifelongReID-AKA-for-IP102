@@ -10,7 +10,7 @@ from lreid.datasets import (IncrementalSamples4subcuhksysu, IncrementalSamples4m
                                IncrementalSamples4cuhk01, IncrementalSamples4cuhk02,
                                IncrementalSamples4viper, IncrementalSamples4ilids,
                                IncrementalSamples4prid, IncrementalSamples4grid,
-                               IncrementalSamples4mix)
+                               IncrementalSamples4mix, IncrementalSamples4ip102)
 from lreid.data_loader.loader import ClassUniformlySampler4Incremental, data, IterLoader, ClassUniformlySampler
 import torch
 import torchvision.transforms as transforms
@@ -47,7 +47,7 @@ class IncrementalReIDLoaders:
         self.datasets = ['market', 'duke', 'cuhksysu', 'subcuhksysu', 'msmt17', 'cuhk03',
                          'mix', 'sensereid',
                          'cuhk01', 'cuhk02', 'viper', 'ilids', 'prid', 'grid', 'generalizable',
-                         'allgeneralizable', 'partgeneralizable', 'finalgeneralizable']
+                         'allgeneralizable', 'partgeneralizable', 'finalgeneralizable', 'ip102']
 
         # dataset
 
@@ -172,6 +172,8 @@ class IncrementalReIDLoaders:
                 samples = IncrementalSamples4prid(self.config.datasets_root, relabel=True, combineall=self.config.combine_all).train
             elif a_train_dataset == 'grid':
                 samples = IncrementalSamples4grid(self.config.datasets_root, relabel=True, combineall=self.config.combine_all).train
+            elif a_train_dataset == 'ip102':
+                samples = IncrementalSamples4ip102(self.config.datasets_root, relabel=True, combineall=self.config.combine_all).train
             samples_list.append(samples)
 
         samples, global_pids_per_step_dict, global_cids_per_step_dict = Incremental_combine_train_samples(samples_list)
@@ -306,19 +308,22 @@ class IncrementalReIDLoaders:
             #                                            combineall=self.config.combine_all)
 
             samples4viper = IncrementalSamples4viper(self.config.datasets_root, relabel=True,
-                                                     combineall=self.config.combine_all)
+                                                      combineall=self.config.combine_all)
 
             samples4ilids = IncrementalSamples4ilids(self.config.datasets_root, relabel=True,
-                                                     combineall=self.config.combine_all)
+                                                      combineall=self.config.combine_all)
 
             samples4prid = IncrementalSamples4prid(self.config.datasets_root, relabel=True,
-                                                   combineall=self.config.combine_all)
+                                                    combineall=self.config.combine_all)
 
             samples4grid = IncrementalSamples4grid(self.config.datasets_root, relabel=True,
-                                                   combineall=self.config.combine_all)
+                                                    combineall=self.config.combine_all)
             query, gallery = Incremental_combine_test_samples(
                 samples_list=[samples4viper, samples4ilids, samples4prid, samples4grid,
                               samples4sensereid])
+        elif a_test_dataset == 'ip102':
+            samples = IncrementalSamples4ip102(self.config.datasets_root, relabel=True, combineall=self.config.combine_all)
+            query, gallery = samples.query, samples.gallery
 
         return query, gallery
 

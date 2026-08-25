@@ -1,17 +1,43 @@
 import ast
+import os
+import time
+import json
 from lreid.tools import time_now
 from lreid.core import Base_metagraph_p_s
 from lreid.data_loader import IncrementalReIDLoaders
 from lreid.visualization import visualize, Logger, VisdomPlotLogger, VisdomFeatureMapsLogger
 from lreid.operation import (train_p_s_an_epoch, fast_test_p_s,
-                                 test_continual_neck,
-                                plot_prerecall_curve, output_featuremaps_from_fixed)
+                             test_continual_neck,
+                             plot_prerecall_curve, output_featuremaps_from_fixed)
+from lreid.evaluation import compute_all_metrics, MetricsLogger, compute_lifelong_metrics
+from lreid.utils import (get_num_gpus, setup_multi_gpu, get_loader_kwargs, 
+                         find_dataset_root, get_task_split, load_ip102_class_mapping,
+                         unwrap_model)
 
 def main(config):
+
+    # Auto-discover dataset root for IP102
+    if 'ip102' in config.train_dataset or 'ip102' in config.test_dataset:
+        if not hasattr(config, 'datasets_root') or not config.datasets_root:
+            config.datasets_root = find_dataset_root('IP102', env_var='IP102_DATA_ROOT')
+        else:
+            try:
+                config.datasets_root = find_dataset_root('IP102', base_paths=[config.datasets_root], env_var='IP102_DATA_ROOT')
+            except FileNotFoundError:
+                pass
+
+    # Setup multi-GPU
+    num_gpus = get_num_gpus()
+    print(f'Using {num_gpus} GPU(s)')
 
     # init loaders and base
     loaders = IncrementalReIDLoaders(config)
     base = Base_metagraph_p_s(config, loaders)
+
+    # Wrap models for multi-GPU
+    if num_gpus > 1:
+        base.model_dict['tasknet'], _ = setup_multi_gpu(base.model_dict['tasknet'])
+        base.model_dict['metagraph'], _ = setup_multi_gpu(base.model_dict['metagraph'])
 
     # init logger
     logger = Logger(os.path.join(base.output_dirs_dict['logs'], 'log.txt'))
@@ -22,6 +48,17 @@ def main(config):
                        'feature_maps_true': VisdomFeatureMapsLogger('image', pad_value=1, nrow=8, port=port, env=config.running_time, opts={'title': f'featuremaps true'}),
                        'feature_maps': VisdomFeatureMapsLogger('image', pad_value=1, nrow=8, port=port, env=config.running_time, opts={'title': f'featuremaps'})}
 
+    # Init metrics logger
+    metrics_logger = MetricsLogger(config.output_path)
+    
+    # Load IP102 class splits for lifelong metrics
+    if 'ip102' in config.train_dataset:
+        _, valid_class_ids = load_ip102_class_mapping()
+        task_splits = get_task_split(valid_class_ids)
+    else:
+        task_splits = None
+
+    map_per_task = []
 
     assert config.mode in ['train', 'test', 'visualize']
     if config.mode == 'train':  # train mode
@@ -30,7 +67,6 @@ def main(config):
             start_train_step, start_train_epoch = base.resume_last_model()
         # continual loop
         for current_step in range(start_train_step, loaders.total_step):
-        # for current_step in range(2, loaders.total_step):
             current_total_train_epochs = config.total_continual_train_epochs if current_step > 0 else config.total_train_epochs
             if current_step > 0:
                 logger(f'save_and_frozen old model in {current_step}')
@@ -47,7 +83,7 @@ def main(config):
                 str_lr, dict_lr = base.get_current_learning_rate()
                 logger(str_lr)
                 if current_epoch < config.epoch_start_joint:
-                    results = train_p_s_an_epoch(config, base, loaders, current_step, old_model,old_graph_model, current_epoch, output_featuremaps=config.output_featuremaps)
+                    results = train_p_s_an_epoch(config, base, loaders, current_step, old_model, old_graph_model, current_epoch, output_featuremaps=config.output_featuremaps)
 
                 if config.output_featuremaps:
                     results_dict, results_str, heatmaps = results
@@ -67,18 +103,43 @@ def main(config):
                         f'Time: {time_now()}; Test Dataset: {config.test_dataset}: {rank_map_str}')
                     visdom_result_dict.update(rank_map_dict)
 
-
                 if current_epoch == config.total_train_epochs - 1:
                     # test
-                    # base.save_model(current_step, config.total_train_epochs)
-                    # mAP, CMC, pres, recalls, thresholds = test_continual_neck(config, base, loaders, current_step)
                     rank_map_dict, rank_map_str = fast_test_p_s(config, base, loaders, current_step, if_test_forget=config.if_test_forget)
                     logger(
                         f'Time: {time_now()}; Step: {current_step}; Epoch: {current_epoch} Test Dataset: {config.test_dataset}, {rank_map_str}')
-                    # plot_prerecall_curve(config, pres, recalls, thresholds, mAP, CMC, 'none', current_step)
                     print(f'Current step {current_step} is finished.')
                     start_train_epoch = 0
                     visdom_result_dict.update(rank_map_dict)
+
+                    # Compute and log comprehensive metrics after each task
+                    if 'ip102' in config.test_dataset:
+                        # Extract mAP for lifelong metrics
+                        task_map = rank_map_dict.get('ip102_fuse_mAP', rank_map_dict.get('ip102_tasknet_mAP', 0))
+                        map_per_task.append(task_map)
+                        
+                        # Compute lifelong metrics
+                        if task_splits:
+                            lifelong = compute_lifelong_metrics(map_per_task, [len(t) for t in task_splits[:current_step+1]])
+                        else:
+                            lifelong = {'plasticity': task_map, 'forgetting': 0.0, 'overall': task_map}
+                        
+                        # Log to CSV/JSON
+                        metrics_logger.log_task(
+                            task_id=current_step + 1,
+                            num_classes=len(task_splits[current_step]) if task_splits else 0,
+                            cnn_top1=rank_map_dict.get('ip102_tasknet_Rank1', 0),
+                            nme_top1=rank_map_dict.get('ip102_fuse_Rank1', 0),
+                            R1=rank_map_dict.get('ip102_tasknet_Rank1', 0),
+                            R5=0,  # Would need full evaluation
+                            R10=0,
+                            mAP=task_map,
+                            AUROC=lifelong.get('plasticity'),
+                            FPR95=lifelong.get('forgetting'),
+                            Plasticity=lifelong['plasticity'],
+                            Forgetting=lifelong['forgetting'],
+                            Overall=lifelong['overall']
+                        )
 
                 if config.visualize_train_by_visdom:
                     visdom_result_dict.update(results_dict)
@@ -106,21 +167,13 @@ def main(config):
             time_now(), config.test_dataset, mAP, CMC, pres, recalls, thresholds))
         plot_prerecall_curve(config, pres, recalls, thresholds, mAP, CMC, 'none')
 
-
     elif config.mode == 'visualize': # visualization mode
         base.resume_from_model(config.resume_visualize_model)
         visualize(config, base, loaders)
 
 
 if __name__ == '__main__':
-    import time
-    import argparse
-    import os
-
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     running_time = time.strftime('%Y-%m-%d-%H-%M-%S')
-    # cfg.data.save_dir = osp.join(cfg.data.save_dir, running_time)
 
     parser = argparse.ArgumentParser()
 
@@ -128,7 +181,7 @@ if __name__ == '__main__':
     parser.add_argument('--running_time', type=str, default=running_time)
     parser.add_argument('--visualize_train_by_visdom', type=bool, default=True)
     parser.add_argument('--cuda', type=str, default='cuda')
-    parser.add_argument('--mode', type=str, default='train', help='trian_10, train_5, train, test or visualize')
+    parser.add_argument('--mode', type=str, default='train', help='train_10, train_5, train, test or visualize')
     parser.add_argument('--output_path', type=str, default=f'results/{running_time}', help='path to save related informations')
     parser.add_argument('--continual_step', type=str, default='5',
                         help='10 or 5 or task')
@@ -141,21 +194,13 @@ if __name__ == '__main__':
     parser.add_argument('--warmup_lr', type=bool, default=False,
                         help='0-10 epoch warmup')
 
-
     # dataset configuration
-    machine_dataset_path = '/home/prometheus/Experiments/Datasets'
-    # machine_dataset_path = '/home/r2d2/r2d2/Datasets/'
-    parser.add_argument('--datasets_root', type=str, default=machine_dataset_path, help='mix/market/duke/')
+    parser.add_argument('--datasets_root', type=str, default='', help='root path for datasets (auto-detect if empty)')
     parser.add_argument('--combine_all', type=ast.literal_eval, default=False, help='train+query+gallery as train')
-    # parser.add_argument('--train_dataset', nargs='+', type=str,
-    #                     default=['market', 'duke', 'cuhksysu', 'subcuhksysu', 'msmt17', 'cuhk03','mix','sensereid',
-    #                              'cuhk01','cuhk02','viper','ilids','prid','grid'])
     parser.add_argument('--train_dataset', nargs='+', type=str,
-                        default=['market','subcuhksysu','duke','msmt17','cuhk03'])
-    # parser.add_argument('--test_dataset', nargs='+', type=str,
-    #                     default=['market','duke','cuhk03','allgeneralizable','cuhk01','cuhk02','viper','ilids','prid','grid','sensereid'])
+                        default=['ip102'])
     parser.add_argument('--test_dataset', nargs='+', type=str,
-                        default=['duke','market','cuhk03','allgeneralizable'])
+                        default=['ip102'])
 
     parser.add_argument('--image_size', type=int, nargs='+', default=[256, 128])
     parser.add_argument('--test_batch_size', type=int, default=64, help='test batch size')
@@ -170,7 +215,7 @@ if __name__ == '__main__':
 
     # model configuration
     parser.add_argument('--cnnbackbone', type=str, default='res50', help='res50, res50ibna')
-    parser.add_argument('--pid_num', type=int, default=2494, help='mix:2494(combineall-2494 + 4512)market:751(combineall-1503), duke:702(1812), msmt:1041(3060), njust:spr3869(5086),win,both(7729)')
+    parser.add_argument('--pid_num', type=int, default=25, help='number of classes for IP102')
 
     # train configuration
     parser.add_argument('--steps', type=int, default=150, help='150 for 5s32p4k, 75 for 10s32p4k')
@@ -189,28 +234,26 @@ if __name__ == '__main__':
     parser.add_argument('--total_train_epochs', type=int, default=50)
     parser.add_argument('--total_continual_train_epochs', type=int, default=50)
 
-
     parser.add_argument('--epoch_start_joint', type=int, default=80, help='start epoch for start joint sampled')
 
     # resume and save
-
     parser.add_argument('--auto_resume_training_from_lastest_steps', type=ast.literal_eval, default=True)
     parser.add_argument('--max_save_model_num', type=int, default=2, help='0 for max num is infinit')
     parser.add_argument('--resume_train_dir', type=str, default='',
-                        help='****************************************************************@@@@@@@@@@@@')
+                        help='resume training directory')
     parser.add_argument('--fast_test', type=bool,
                         default=True,
                         help='test during train using Cython')
 
     parser.add_argument('--test_frequency', type=int,
                         default=11,
-                        help='test during trai, i <= 0 means do not test during train')
+                        help='test during train, <= 0 means do not test during train')
     parser.add_argument('--if_test_forget', type=bool,
                         default=True,
-                        help='test during train for forgeting')
+                        help='test during train for forgetting')
     parser.add_argument('--if_test_metagraph', type=bool,
                         default=False,
-                        help='test during train for forgeting')
+                        help='test during train for metagraph')
 
     # test configuration
     parser.add_argument('--resume_test_model', type=str, default='/path/to/pretrained/model.pkl', help='')
@@ -234,15 +277,12 @@ if __name__ == '__main__':
     parser.add_argument('--output_featuremaps_from_fixed', type=bool, default=False,
                         help='alternative from fixed or training sample')
 
-
     # losses configuration
     parser.add_argument('--weight_x', type=float, default=1, help='weight for cross entropy loss')
     # for graph
-
     parser.add_argument('--meta_graph_vertex_num', type=int, default=64,
                         help='meta_graph_vertex_num')
     parser.add_argument('--weight_r', type=float, default=0.0005, help='weight for fd loss')
-
 
     # for embed net
     parser.add_argument('--weight_t', type=float, default=1, help='weight for triplet loss')
@@ -250,13 +290,11 @@ if __name__ == '__main__':
     parser.add_argument('--t_metric', type=str, default='euclidean', help='euclidean, cosine')
     parser.add_argument('--t_l2', type=bool, default=False, help='if l2 normal for the triplet loss with batch hard')
 
-    # for classifier disstilation
-
+    # for classifier distillation
     parser.add_argument('--weight_kd', type=float, default=1, help='weight for cross entropy loss')
     parser.add_argument('--kd_T', type=float, default=2, help='weight for cross entropy loss')
 
-    # for features disstilation
-
+    # for features distillation
     parser.add_argument('--weight_fkd', type=float, default=0, help='weight for cross entropy loss')
     parser.add_argument('--fkd_l2', type=bool, default=False, help='weight for cross entropy loss')
 
@@ -265,11 +303,16 @@ if __name__ == '__main__':
     parser.add_argument('--code_dim', type=int, default=2048, help='dim for latent code which is same with dim of feature')
     parser.add_argument('--num_G_feature', type=int, default=512, help='num_G_feature')
 
-
+    # Multi-GPU configuration
+    parser.add_argument('--device', type=str, default='auto', help='device config: auto, cuda, or comma-separated GPU IDs')
 
     # main
     config = parser.parse_args()
+    
+    # Set CUDA_VISIBLE_DEVICES if specified
+    if config.device != 'auto':
+        os.environ["CUDA_VISIBLE_DEVICES"] = config.device
+    else:
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    
     main(config)
-
-
-
