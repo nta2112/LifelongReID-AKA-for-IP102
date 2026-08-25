@@ -46,10 +46,10 @@ def visualize(config, base, loaders):
 	query_features = query_features_meter.get_val()
 	gallery_features = gallery_features_meter.get_val()
 
-	if config.test_metric is 'cosine':
+	if config.test_metric == 'cosine':
 		distance = tensor_cosine_dist(query_features, gallery_features).data.cpu().numpy()
 
-	elif config.test_metric is 'euclidean':
+	elif config.test_metric == 'euclidean':
 		distance = tensor_euclidean_dist(query_features, gallery_features).data.cpu().numpy()
 
 	# visualize
