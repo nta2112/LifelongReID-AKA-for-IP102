@@ -37,7 +37,8 @@ def main(config):
     # Wrap models for multi-GPU
     if num_gpus > 1:
         base.model_dict['tasknet'], _ = setup_multi_gpu(base.model_dict['tasknet'])
-        base.model_dict['metagraph'], _ = setup_multi_gpu(base.model_dict['metagraph'])
+        # metagraph has torch.inverse() - don't wrap in DataParallel
+        base.model_dict['metagraph'] = base.model_dict['metagraph'].cuda()
 
     # init logger
     logger = Logger(os.path.join(base.output_dirs_dict['logs'], 'log.txt'))
