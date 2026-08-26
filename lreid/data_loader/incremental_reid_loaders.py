@@ -276,9 +276,10 @@ class IncrementalReIDLoaders:
                     img_path, _, camid, dataset_name, orig_class = sample
                     local_pid = local_pid_map[orig_c]
                     global_pid = current_global_pid + local_pid
-                    # Sample format: [img_path, global_pid, camid, dataset_name, local_pid]
-                    # This matches what train_p_s.py expects at index 4 (local_pids)
-                    task_data.append([img_path, global_pid, camid, dataset_name, local_pid])
+                    # Sample format: [img_path, global_pid, camid, dataset_name, global_pid]
+                    # Index 4 = global_pid (matches model's classifier output indices)
+                    # This is used as target for IDE loss in train_p_s.py
+                    task_data.append([img_path, global_pid, camid, dataset_name, global_pid])
                     task_pids.add(global_pid)
                     task_cids.add(camid)
             
@@ -459,14 +460,15 @@ class IncrementalReIDLoaders:
         if not self.is_ip102_only:
             return None, None
         
-        # Get classes up to current step
-        seen_classes = set()
+        # Get original class IDs up to current step
+        seen_orig_classes = set()
         for i in range(step + 1):
-            seen_classes.update(self.ip102_task_splits[i])
+            seen_orig_classes.update(self.ip102_task_splits[i])
         
-        # Filter query and gallery to only include seen classes
-        filtered_query = [s for s in self.ip102_full_query if s[4] in seen_classes]
-        filtered_gallery = [s for s in self.ip102_full_gallery if s[4] in seen_classes]
+        # Filter query and gallery to only include seen original classes
+        # ip102_full_query/gallery have format: [img_path, global_pid, camid, dataset_name, orig_class_id]
+        filtered_query = [s for s in self.ip102_full_query if s[4] in seen_orig_classes]
+        filtered_gallery = [s for s in self.ip102_full_gallery if s[4] in seen_orig_classes]
         
         return filtered_query, filtered_gallery
 
