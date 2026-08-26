@@ -210,9 +210,36 @@ class MetricsLogger:
         with open(self.csv_path, 'w') as f:
             f.write(header)
     
+    def _to_serializable(self, val):
+        """Convert numpy types to Python native types for JSON serialization"""
+        if val is None:
+            return None
+        if hasattr(val, 'item'):  # numpy scalar
+            return val.item()
+        if isinstance(val, (np.integer, np.floating)):
+            return val.item()
+        if isinstance(val, np.ndarray):
+            return val.tolist()
+        return val
+    
     def log_task(self, task_id, num_classes, cnn_top1, nme_top1, 
                  R1, R5, R10, mAP, AUROC, FPR95, Plasticity, Forgetting, Overall):
         import os
+        # Convert all values to serializable
+        task_id = self._to_serializable(task_id)
+        num_classes = self._to_serializable(num_classes)
+        cnn_top1 = self._to_serializable(cnn_top1)
+        nme_top1 = self._to_serializable(nme_top1)
+        R1 = self._to_serializable(R1)
+        R5 = self._to_serializable(R5)
+        R10 = self._to_serializable(R10)
+        mAP = self._to_serializable(mAP)
+        AUROC = self._to_serializable(AUROC)
+        FPR95 = self._to_serializable(FPR95)
+        Plasticity = self._to_serializable(Plasticity)
+        Forgetting = self._to_serializable(Forgetting)
+        Overall = self._to_serializable(Overall)
+        
         row = f'{task_id},{num_classes},{cnn_top1},{nme_top1},{R1},{R5},{R10},{mAP},{AUROC},{FPR95},{Plasticity},{Forgetting},{Overall}\n'
         with open(self.csv_path, 'a') as f:
             f.write(row)
