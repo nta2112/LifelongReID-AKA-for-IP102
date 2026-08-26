@@ -25,6 +25,7 @@ class IP102(ImageDataset):
         
         self.class_id_to_name = self._load_class_names()
         self.valid_class_ids = self._load_filtered_classes()
+        self.images_dir = self._find_images_dir(self.dataset_dir)
         
         train = self.process_json(self.train_json, relabel=True)
         query = self.process_json(self.val_json, relabel=False)
@@ -51,6 +52,30 @@ class IP102(ImageDataset):
                 return r
         
         raise FileNotFoundError(f'Could not find IP102 dataset. Searched in: {candidates}')
+    
+    def _find_images_dir(self, json_root):
+        """Find the directory containing the actual image files"""
+        candidates = [
+            osp.join(json_root, 'VOC2007', 'VOC2007', 'JPEGImages'),
+            osp.join(json_root, 'JPEGImages'),
+            osp.join(json_root, 'images'),
+            osp.join(osp.dirname(json_root), 'VOC2007', 'VOC2007', 'JPEGImages'),
+            osp.join(osp.dirname(json_root), 'JPEGImages'),
+            osp.join(osp.dirname(json_root), 'images'),
+            json_root,
+        ]
+        
+        for c in candidates:
+            if osp.exists(c) and any(f.endswith('.jpg') for f in os.listdir(c)[:5]):
+                return c
+        
+        # Fallback: search recursively
+        for root, dirs, files in os.walk(json_root):
+            jpg_files = [f for f in files if f.endswith('.jpg')]
+            if len(jpg_files) > 100:
+                return root
+        
+        return json_dir
     
     def _load_class_names(self):
         mapping = {}
@@ -96,12 +121,16 @@ class IP102(ImageDataset):
                 continue
             
             file_name = image_info['file_name']
-            img_path = osp.join(osp.dirname(json_path), file_name)
+            img_path = osp.join(self.images_dir, file_name)
             
             if not osp.exists(img_path):
+                # Fallback search
                 alt_paths = [
+                    osp.join(osp.dirname(json_path), file_name),
                     osp.join(osp.dirname(json_path), 'images', file_name),
                     osp.join(osp.dirname(osp.dirname(json_path)), 'images', file_name),
+                    osp.join(osp.dirname(osp.dirname(json_path)), 'VOC2007', 'VOC2007', 'JPEGImages', file_name),
+                    osp.join(osp.dirname(osp.dirname(json_path)), 'JPEGImages', file_name),
                 ]
                 for alt in alt_paths:
                     if osp.exists(alt):
