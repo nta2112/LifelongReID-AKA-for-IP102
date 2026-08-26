@@ -3,6 +3,17 @@ from lreid.tools import time_now, CatMeter
 from lreid.evaluation import (fast_evaluate_rank, compute_distance_matrix)
 
 
+def _get_ip102_task_loaders(loaders, current_step, transform_test, batch_size):
+    """Get per-task filtered query/gallery loaders for IP102"""
+    if hasattr(loaders, 'get_task_test_samples'):
+        query_samples, gallery_samples = loaders.get_task_test_samples(current_step)
+        if query_samples is not None and gallery_samples is not None:
+            query_loader = loaders._get_loader(query_samples, transform_test, batch_size)
+            gallery_loader = loaders._get_loader(gallery_samples, transform_test, batch_size)
+            return {'ip102': [query_loader, gallery_loader]}
+    return None
+
+
 def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
     # using Cython test during train
     # return mAP, Rank-1
@@ -28,7 +39,15 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
 
         return CMC[0] * 100, mAP * 100
     results_dict = {}
-    for dataset_name, temp_loaders in loaders.test_loader_dict.items():
+    
+    # Check if we need per-task test loaders for IP102
+    test_loader_dict = loaders.test_loader_dict
+    if config.test_dataset == ['ip102'] and hasattr(loaders, 'get_task_test_samples'):
+        task_loaders = _get_ip102_task_loaders(loaders, current_step, config.transform_test, config.test_batch_size)
+        if task_loaders:
+            test_loader_dict = task_loaders
+    
+    for dataset_name, temp_loaders in test_loader_dict.items():
         query_features_meter, query_pids_meter, query_cids_meter = CatMeter(), CatMeter(), CatMeter()
         gallery_features_meter, gallery_pids_meter, gallery_cids_meter = CatMeter(), CatMeter(), CatMeter()
         query_metagraph_features_meter, query_metagraph_pids_meter, query_metagraph_cids_meter = CatMeter(), CatMeter(), CatMeter()
@@ -63,27 +82,6 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
                             gallery_fuse_features_meter.update(features_fuse.data)
                         gallery_pids_meter.update(pids)
                         gallery_cids_meter.update(cids)
-
-        # print(f'Save distance matrix to RegDB_three_stream_dist({current_step}).npy')
-        #
-        #
-        #
-        # np.save(os.path.join(config.feature_save_path, f'query_features_({dataset_name})_({current_step}).pth'),
-        #         query_features_meter.get_val_numpy())
-        # np.save(os.path.join(config.feature_save_path, f'query_pids_({dataset_name})_({current_step}).pth'),
-        #         query_pids_meter.get_val_numpy())
-        # np.save(os.path.join(config.feature_save_path, f'query_cids_({dataset_name})_({current_step}).pth'),
-        #         query_cids_meter.get_val_numpy())
-        # np.save(os.path.join(config.feature_save_path, f'gallery_features_({dataset_name})_({current_step}).pth'),
-        #         gallery_features_meter.get_val_numpy())
-        # np.save(os.path.join(config.feature_save_path, f'gallery_pids_({dataset_name})_({current_step}).pth'),
-        #         gallery_pids_meter.get_val_numpy())
-        # np.save(os.path.join(config.feature_save_path, f'gallery_cids_({dataset_name})_({current_step}).pth'),
-        #         gallery_cids_meter.get_val_numpy())
-        # np.save(os.path.join(config.feature_save_path, f'query_fuse_features_({dataset_name})_({current_step}).pth'),
-        #         query_fuse_features_meter.get_val_numpy())
-        # np.save(os.path.join(config.feature_save_path, f'gallery_fuse_features_({dataset_name})_({current_step}).pth'),
-        #         gallery_fuse_features_meter.get_val_numpy())
 
         print(time_now(), f' {dataset_name} feature done')
         rank1, map = _cmc_map(query_features_meter, gallery_features_meter)
