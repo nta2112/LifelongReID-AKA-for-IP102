@@ -15,12 +15,14 @@ def _get_seen_global_pids(loaders, current_step):
                 orig_to_global[orig_c] = global_pid
                 global_pid += 1
         
-        seen = set()
+        seen_global = set()
+        seen_orig = set()
         for i in range(current_step + 1):
             for orig_c in loaders.ip102_task_splits[i]:
-                seen.add(orig_to_global[orig_c])
-        return seen
-    return None
+                seen_global.add(orig_to_global[orig_c])
+                seen_orig.add(orig_c)
+        return seen_global, seen_orig, orig_to_global
+    return None, None, None
 
 
 def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
@@ -76,7 +78,7 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
         return ood['AUROC'], ood['FPR95']
 
     results_dict = {}
-    seen_global_pids = _get_seen_global_pids(loaders, current_step)
+    seen_global_pids, seen_orig_classes, orig_to_global = _get_seen_global_pids(loaders, current_step)
     print(f'  Step {current_step}: Seen global PIDs = {sorted(seen_global_pids) if seen_global_pids else "None"}')
 
     for dataset_name, temp_loaders in loaders.test_loader_dict.items():
@@ -112,16 +114,21 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
         query_features = query_features_meter.get_val()
         gallery_features = gallery_features_meter.get_val()
 
-        if seen_global_pids is not None:
+        if seen_global_pids is not None and orig_to_global is not None:
+            # Test samples have original class IDs at index 4 (category_id)
+            # Map to global PIDs for evaluation
+            query_global_pids = np.array([orig_to_global.get(p, -1) for p in query_pids])
+            gallery_global_pids = np.array([orig_to_global.get(p, -1) for p in gallery_pids])
+            
             # Filter to SEEN classes for closed-world metrics
-            seen_mask_q = np.isin(query_pids, list(seen_global_pids))
-            seen_mask_g = np.isin(gallery_pids, list(seen_global_pids))
+            seen_mask_q = np.isin(query_global_pids, list(seen_global_pids))
+            seen_mask_g = np.isin(gallery_global_pids, list(seen_global_pids))
             
             if np.sum(seen_mask_q) > 0 and np.sum(seen_mask_g) > 0:
                 q_feat_seen = query_features[seen_mask_q]
                 g_feat_seen = gallery_features[seen_mask_g]
-                q_pids_seen = query_pids[seen_mask_q]
-                g_pids_seen = gallery_pids[seen_mask_g]
+                q_pids_seen = query_global_pids[seen_mask_q]
+                g_pids_seen = gallery_global_pids[seen_mask_g]
                 q_cids_seen = query_cids[seen_mask_q]
                 g_cids_seen = gallery_cids[seen_mask_g]
 
@@ -136,7 +143,7 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
 
                 # === OPEN-WORLD: SEEN vs UNSEEN ===
                 auroc, fpr95 = _compute_open_set_metrics(
-                    query_features, gallery_features, query_pids, gallery_pids, seen_global_pids)
+                    query_features, gallery_features, query_global_pids, gallery_global_pids, seen_global_pids)
                 if auroc is not None:
                     results_dict[f'{dataset_name}_AUROC'] = auroc * 100
                     results_dict[f'{dataset_name}_FPR95'] = fpr95 * 100

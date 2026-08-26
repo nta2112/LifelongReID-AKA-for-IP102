@@ -276,10 +276,10 @@ class IncrementalReIDLoaders:
                     img_path, _, camid, dataset_name, orig_class = sample
                     local_pid = local_pid_map[orig_c]
                     global_pid = current_global_pid + local_pid
-                    # Sample format: [img_path, global_pid, camid, dataset_name, global_pid]
-                    # Index 4 = global_pid (matches model's classifier output indices)
-                    # This is used as target for IDE loss in train_p_s.py
-                    task_data.append([img_path, global_pid, camid, dataset_name, global_pid])
+                    # Sample format: [img_path, global_pid, camid, dataset_name, local_pid]
+                    # Index 4 = local_pid (0-6 for step 0, 0-5 for step 1, etc.)
+                    # This matches the step's classifier output size
+                    task_data.append([img_path, global_pid, camid, dataset_name, local_pid])
                     task_pids.add(global_pid)
                     task_cids.add(camid)
             
