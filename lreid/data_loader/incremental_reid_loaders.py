@@ -276,7 +276,9 @@ class IncrementalReIDLoaders:
                     img_path, _, camid, dataset_name, orig_class = sample
                     local_pid = local_pid_map[orig_c]
                     global_pid = current_global_pid + local_pid
-                    task_data.append([img_path, global_pid, camid, dataset_name, orig_class])
+                    # Sample format: [img_path, global_pid, camid, dataset_name, local_pid]
+                    # This matches what train_p_s.py expects at index 4 (local_pids)
+                    task_data.append([img_path, global_pid, camid, dataset_name, local_pid])
                     task_pids.add(global_pid)
                     task_cids.add(camid)
             

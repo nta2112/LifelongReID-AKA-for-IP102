@@ -4,12 +4,21 @@ from lreid.tools import time_now, CatMeter
 from lreid.evaluation import (fast_evaluate_rank, compute_distance_matrix, compute_ood_metrics)
 
 
-def _get_seen_classes(loaders, current_step):
-    """Get seen class IDs up to current step for IP102"""
+def _get_seen_global_pids(loaders, current_step):
+    """Get seen global PIDs (0-24) up to current step for IP102"""
     if hasattr(loaders, 'ip102_task_splits'):
+        # Build mapping from original class ID to global PID
+        orig_to_global = {}
+        global_pid = 0
+        for task_classes in loaders.ip102_task_splits:
+            for orig_c in task_classes:
+                orig_to_global[orig_c] = global_pid
+                global_pid += 1
+        
         seen = set()
         for i in range(current_step + 1):
-            seen.update(loaders.ip102_task_splits[i])
+            for orig_c in loaders.ip102_task_splits[i]:
+                seen.add(orig_to_global[orig_c])
         return seen
     return None
 
@@ -43,7 +52,7 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
                                       use_cython=True)
         return CMC[0] * 100, mAP * 100
 
-    def _compute_open_set_metrics(query_features, gallery_features, query_pids, gallery_pids, seen_classes):
+    def _compute_open_set_metrics(query_features, gallery_features, query_pids, gallery_pids, seen_global_pids):
         """Compute open-set metrics: AUROC, FPR@TPR95 for seen vs unseen"""
         # For each query, get min distance to gallery
         distance_matrix = compute_distance_matrix(query_features, gallery_features, config.test_metric)
@@ -54,7 +63,7 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
         scores = -min_dist  # higher = more confident
         
         query_pids_np = query_pids
-        seen_mask = np.isin(query_pids_np, list(seen_classes))
+        seen_mask = np.isin(query_pids_np, list(seen_global_pids))
         unseen_mask = ~seen_mask
         
         if np.sum(seen_mask) == 0 or np.sum(unseen_mask) == 0:
@@ -67,8 +76,8 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
         return ood['AUROC'], ood['FPR95']
 
     results_dict = {}
-    seen_classes = _get_seen_classes(loaders, current_step)
-    print(f'  Step {current_step}: Seen classes = {sorted(seen_classes) if seen_classes else "None"}')
+    seen_global_pids = _get_seen_global_pids(loaders, current_step)
+    print(f'  Step {current_step}: Seen global PIDs = {sorted(seen_global_pids) if seen_global_pids else "None"}')
 
     for dataset_name, temp_loaders in loaders.test_loader_dict.items():
         query_features_meter, query_pids_meter, query_cids_meter = CatMeter(), CatMeter(), CatMeter()
@@ -103,10 +112,10 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
         query_features = query_features_meter.get_val()
         gallery_features = gallery_features_meter.get_val()
 
-        if seen_classes is not None:
+        if seen_global_pids is not None:
             # Filter to SEEN classes for closed-world metrics
-            seen_mask_q = np.isin(query_pids, list(seen_classes))
-            seen_mask_g = np.isin(gallery_pids, list(seen_classes))
+            seen_mask_q = np.isin(query_pids, list(seen_global_pids))
+            seen_mask_g = np.isin(gallery_pids, list(seen_global_pids))
             
             if np.sum(seen_mask_q) > 0 and np.sum(seen_mask_g) > 0:
                 q_feat_seen = query_features[seen_mask_q]
@@ -123,11 +132,11 @@ def fast_test_p_s(config, base, loaders, current_step, if_test_forget=True):
                                               max_rank=50, use_metric_cuhk03=False, use_cython=True)
                 results_dict[f'{dataset_name}_seen_R@1'] = CMC[0] * 100
                 results_dict[f'{dataset_name}_seen_mAP'] = mAP * 100
-                print(f'  SEEN ({len(seen_classes)} classes): R@1={CMC[0]*100:.2f}%, mAP={mAP*100:.2f}%')
+                print(f'  SEEN ({len(seen_global_pids)} classes): R@1={CMC[0]*100:.2f}%, mAP={mAP*100:.2f}%')
 
                 # === OPEN-WORLD: SEEN vs UNSEEN ===
                 auroc, fpr95 = _compute_open_set_metrics(
-                    query_features, gallery_features, query_pids, gallery_pids, seen_classes)
+                    query_features, gallery_features, query_pids, gallery_pids, seen_global_pids)
                 if auroc is not None:
                     results_dict[f'{dataset_name}_AUROC'] = auroc * 100
                     results_dict[f'{dataset_name}_FPR95'] = fpr95 * 100
