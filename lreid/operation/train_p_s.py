@@ -1,10 +1,12 @@
 import torch
 import time
+import os
 from lreid.tools import MultiItemAverageMeter
 from lreid.evaluation import accuracy
 
 
 def train_p_s_an_epoch(config, base, loader, current_step, old_model, old_graph_model, current_epoch=None, output_featuremaps=True):
+    os.environ.pop('CUDA_LAUNCH_BLOCKING', None)
     base.set_all_model_train()
     meter = MultiItemAverageMeter()
     if old_model is None:
@@ -35,6 +37,8 @@ def train_p_s_an_epoch(config, base, loader, current_step, old_model, old_graph_
         loss = 0
         ### forward
         if old_model is None:
+            if _ == 0:
+                print('Starting tasknet forward', flush=True)
             features, cls_score, feature_maps = base.model_dict['tasknet'](imgs, current_step)
             if _ == 0:
                 print('First tasknet forward completed', flush=True)
