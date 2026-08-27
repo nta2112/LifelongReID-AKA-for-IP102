@@ -29,7 +29,7 @@ class ClassUniformlySampler(data.sampler.Sampler):
         return iter(self.sample_list)
 
     def __len__(self):
-        return len(self.sample_list)
+        return sum(max(len(indices), self.k) for indices in self.class_dict.values())
 
     def _tuple2dict(self, inputs):
         '''
@@ -175,7 +175,7 @@ class ClassUniformlySampler4Incremental(data.sampler.Sampler):
         return iter(self.sample_list)
 
     def __len__(self):
-        return len(self.sample_list)
+        return sum(max(len(indices), self.k) for indices in self.class_dict.values())
 
     def _tuple2dict(self, inputs):
         '''

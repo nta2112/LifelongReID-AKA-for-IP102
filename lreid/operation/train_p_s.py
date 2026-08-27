@@ -1,4 +1,5 @@
 import torch
+import time
 from lreid.tools import MultiItemAverageMeter
 from lreid.evaluation import accuracy
 
@@ -11,12 +12,15 @@ def train_p_s_an_epoch(config, base, loader, current_step, old_model, old_graph_
     else:
         print('****** training both tasknet and metagraph ******\n')
     heatmaps_dict = {}
+    start_time = time.time()
     ### we assume 200 iterations as an epoch
     for _ in range(config.steps):
         base.set_model_and_optimizer_zero_grad()
         ### load a batch data
         mini_batch = loader.continual_train_iter_dict[
             current_step].next_one()
+        if _ == 0:
+            print(f'First training batch loaded in {time.time() - start_time:.2f}s', flush=True)
         if mini_batch[0].size(0) != config.p * config.k:
             mini_batch = loader.continual_train_iter_dict[
                 current_step].next_one()
