@@ -36,7 +36,11 @@ def train_p_s_an_epoch(config, base, loader, current_step, old_model, old_graph_
         ### forward
         if old_model is None:
             features, cls_score, feature_maps = base.model_dict['tasknet'](imgs, current_step)
+            if _ == 0:
+                print('First tasknet forward completed', flush=True)
             protos, correlation = base.model_dict['metagraph'](features.detach())
+            if _ == 0:
+                print('First metagraph forward completed', flush=True)
 
             feature_fuse = features + protos
             plasticity_loss = config.weight_t * base.triplet_criterion(feature_fuse, feature_fuse, feature_fuse, local_pids, local_pids, local_pids)
@@ -48,6 +52,8 @@ def train_p_s_an_epoch(config, base, loader, current_step, old_model, old_graph_
                 'show_correlation_transfered_feature': correlation[2].data
             })
             loss += plasticity_loss
+            if _ == 0:
+                print('First triplet loss completed', flush=True)
             del feature_maps, feature_fuse, features, protos
         else:
             old_current_step = list(range(current_step))
@@ -87,6 +93,8 @@ def train_p_s_an_epoch(config, base, loader, current_step, old_model, old_graph_
 
         loss += ide_loss
         acc = accuracy(cls_score, local_pids, [1])[0]
+        if _ == 0:
+            print('First classifier loss completed', flush=True)
 
         ### optimize
         base.optimizer_dict['tasknet'].zero_grad()
@@ -96,6 +104,8 @@ def train_p_s_an_epoch(config, base, loader, current_step, old_model, old_graph_
                 scaled_loss.backward()
         else:
             loss.backward()
+        if _ == 0:
+            print('First backward completed', flush=True)
 
         base.optimizer_dict['tasknet'].step()
         base.optimizer_dict['metagraph'].step()
