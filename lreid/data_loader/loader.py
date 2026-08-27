@@ -234,6 +234,6 @@ class IterLoader:
     def next_one(self):
         try:
             return next(self.iter)
-        except:
+        except StopIteration:
             self.iter = iter(self.loader)
             return next(self.iter)

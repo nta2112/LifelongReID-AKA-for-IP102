@@ -480,7 +480,8 @@ class IncrementalReIDLoaders:
         # dataset.sample is list  dataset.transform
         dataset = IncrementalReIDDataSet(samples, self.total_step, transform=transform)
         # ClassUniformlySampler
-        loader = data.DataLoader(dataset, batch_size=p * k, num_workers=8, drop_last=False,
+        num_workers = getattr(self.config, 'num_workers', 0)
+        loader = data.DataLoader(dataset, batch_size=p * k, num_workers=num_workers, drop_last=False,
                                  sampler=ClassUniformlySampler4Incremental(dataset, class_position=1, k=k, pid_list=pid_list))
         iters = IterLoader(loader)
         return iters
